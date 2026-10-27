@@ -20,3 +20,13 @@ field_release/
 
 # Model runtime cache
 models/.trt_cache/
+
+# Versioned deployment staging directories
+field_release_143/
+field_release_146/
+field_release_148/
+
+# Local backup scripts and accidental files
+*.before_retry_fix
+*.pre_v1.4.3
+/1

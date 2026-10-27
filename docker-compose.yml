@@ -18,7 +18,7 @@ services:
     restart: unless-stopped
 
   inference_worker:
-    image: eoir-inference-worker:${IMAGE_TAG:-1.4.2}
+    image: eoir-inference-worker:${IMAGE_TAG:-1.4.8}
     build:
       context: .
       dockerfile: Dockerfile
@@ -41,7 +41,7 @@ services:
     restart: unless-stopped
 
   vision_api:
-    image: eoir-vision-api:${IMAGE_TAG:-1.4.2}
+    image: eoir-vision-api:${IMAGE_TAG:-1.4.8}
     build:
       context: .
       dockerfile: Dockerfile
@@ -54,7 +54,7 @@ services:
       DB_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
       DB_NAME: ${POSTGRES_DB:?Set POSTGRES_DB in .env}
     ports:
-      - "8000:8000"
+      - "${API_HOST_IP:-0.0.0.0}:${API_HOST_PORT:-8000}:8000"
     depends_on:
       inference_worker:
         condition: service_healthy

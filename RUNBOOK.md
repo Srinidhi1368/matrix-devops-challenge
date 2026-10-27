@@ -1,4 +1,4 @@
-# EO/IR Stack v1.4.2 — Field Runbook
+# EO/IR Stack v1.4.8 — Field Runbook
 
 ## Release gate and known fixture limitation
 Run `cp .env.example .env`, set a strong `POSTGRES_PASSWORD`, then `docker compose up -d --build`.
@@ -22,9 +22,9 @@ Line references below refer to the original challenge files as received; fix loc
 
 ## Air-gapped packaging and deployment
 1. On the connected build machine, install Docker Compose, copy `.env.example` to `.env`, and set a strong password. Never distribute `.env`.
-2. Run `./package_airgap.sh`. It builds version-tagged images, exports them to `images.tar`, includes source/config/models, generates `SHA256SUMS`, and creates `release_v1.4.2.tar.gz`.
+2. Run `./package_airgap.sh`. It builds version-tagged images, exports them to `images.tar`, includes source/config/models, generates `SHA256SUMS`, and creates `release_v1.4.8.tar.gz`.
 3. Transfer the bundle to the field host using approved media. Optionally verify the outer archive with the SHA-256 printed by the packaging script using a separately communicated digest.
-4. Run `./deploy_airgap.sh release_v1.4.2.tar.gz ./field_release`. On first run it extracts and verifies the payload checksums, creates `.env` from the template, and exits for password configuration. Set the password in `./field_release/.env`, then rerun the command.
+4. Run `./deploy_airgap.sh release_v1.4.8.tar.gz ./field_release`. On first run it extracts and verifies the payload checksums, creates `.env` from the template, and exits for password configuration. Set the password in `./field_release/.env`, then rerun the command.
 5. Deployment verifies `SHA256SUMS` **before** `docker load`, loads the prebuilt images, starts Compose with `--no-build`, then verifies worker health and API endpoints. No registry or internet access is required. `SHA256SUMS` covers every payload file except itself (a checksum manifest cannot meaningfully include its own digest).
 
 ## 15-minute field rollback: bad engine promotion
