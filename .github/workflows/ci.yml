@@ -1,0 +1,229 @@
+name: Site-Release-CI
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Verify model artifact integrity
+        run: python -m unittest discover -s tests -v
+
+      - name: Validate shell scripts
+        run: |
+          bash -n package_airgap.sh
+          bash -n deploy_airgap.sh
+
+      - name: Configure test environment
+        run: |
+          cp .env.example .env
+          sed -i 's/CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD/ci-only-not-a-real-secret/' .env
+
+      - name: Validate Docker Compose configuration
+        run: docker compose config --quiet
+
+  build_test:
+    runs-on: ubuntu-latest
+    needs: validate
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure test environment
+        run: |
+          cp .env.example .env
+          sed -i 's/CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD/ci-only-not-a-real-secret/' .env
+          echo "IMAGE_TAG=${GITHUB_SHA}" >> .env
+
+      - name: Build versioned images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          docker compose build
+          test "$(docker image inspect -f '{{.Size}}' "eoir-vision-api:${IMAGE_TAG}")" -lt 220000000
+          test "$(docker image inspect -f '{{.Size}}' "eoir-inference-worker:${IMAGE_TAG}")" -lt 220000000
+
+      - name: Smoke test healthy stack
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          cleanup() {
+            docker compose down -v --remove-orphans || true
+          }
+          trap cleanup EXIT
+
+          docker compose up -d --no-build
+
+          ready=0
+          for i in $(seq 1 30); do
+            if curl --fail --silent http://localhost:8000/health | grep -q '"worker_ready": true'; then
+              ready=1
+              break
+            fi
+            sleep 2
+          done
+
+          if [ "$ready" -ne 1 ]; then
+            echo "FAIL: API did not become healthy within 60 seconds." >&2
+            docker compose ps
+            docker compose logs --tail=100
+            exit 1
+          fi
+
+          curl --fail --silent --show-error http://localhost:8000/health
+          echo
+          curl --fail --silent --show-error http://localhost:8000/api/v1/detect
+          echo
+
+      - name: Prove corruption is detected within 15 seconds
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+
+          ENGINE="models/eo_detector_fp16.engine"
+          BACKUP="$(mktemp)"
+          cp "$ENGINE" "$BACKUP"
+
+          cleanup() {
+            cp "$BACKUP" "$ENGINE"
+            rm -f "$BACKUP"
+            docker compose down -v --remove-orphans || true
+          }
+          trap cleanup EXIT
+
+          docker compose up -d --no-build
+
+          container_id="$(docker compose ps -q inference_worker)"
+          if [ -z "$container_id" ]; then
+            echo "FAIL: inference_worker container was not created." >&2
+            docker compose ps
+            exit 1
+          fi
+
+          initial_ready=0
+          for i in $(seq 1 30); do
+            state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")"
+
+            if [ "$state" = "healthy" ]; then
+              initial_ready=1
+              break
+            fi
+
+            if [ "$state" = "unhealthy" ]; then
+              echo "FAIL: Worker was unhealthy before corruption." >&2
+              docker compose logs --tail=100 inference_worker
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          if [ "$initial_ready" -ne 1 ]; then
+            echo "FAIL: Worker did not become healthy before corruption." >&2
+            docker compose ps
+            docker compose logs --tail=100 inference_worker
+            exit 1
+          fi
+
+          printf 'corrupt' >> "$ENGINE"
+
+          start_seconds="$(date +%s.%N)"
+          deadline=$((SECONDS + 15))
+          detected=0
+
+          while [ "$SECONDS" -lt "$deadline" ]; do
+            state="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}missing{{end}}' "$container_id")"
+
+            if [ "$state" = "unhealthy" ]; then
+              detected=1
+              break
+            fi
+
+            sleep 0.2
+          done
+
+          end_seconds="$(date +%s.%N)"
+          elapsed="$(python3 -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.3f}")' "$start_seconds" "$end_seconds")"
+          echo "Unhealthy transition elapsed: ${elapsed}s"
+
+          if [ "$detected" -ne 1 ]; then
+            echo "FAIL: Worker did not become unhealthy within 15 seconds." >&2
+            docker compose ps
+            docker compose logs --tail=100 inference_worker
+            exit 1
+          fi
+
+          api_code="$(curl --silent --output /tmp/api-health.json --write-out '%{http_code}' http://localhost:8000/health || true)"
+          cat /tmp/api-health.json || true
+          echo
+
+          if [ "$api_code" != "503" ]; then
+            echo "FAIL: Expected API health HTTP 503; got ${api_code}." >&2
+            docker compose logs --tail=100
+            exit 1
+          fi
+
+          echo "PASS: Corruption detected within the 15-second limit and API returned HTTP 503."
+
+  publish_immutable:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    needs: build_test
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure build environment
+        run: |
+          cp .env.example .env
+          sed -i 's/CHANGE_ME_TO_A_LONG_RANDOM_PASSWORD/ci-only-not-a-real-secret/' .env
+
+      - name: Build immutable commit images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> .env
+          docker compose build
+          docker image inspect "eoir-vision-api:${IMAGE_TAG}"
+          docker image inspect "eoir-inference-worker:${IMAGE_TAG}"
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish immutable commit images
+        env:
+          REGISTRY: ghcr.io/${{ github.repository_owner }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -Eeuo pipefail
+          docker tag "eoir-vision-api:${IMAGE_TAG}" "${REGISTRY}/eoir-vision-api:${IMAGE_TAG}"
+          docker tag "eoir-inference-worker:${IMAGE_TAG}" "${REGISTRY}/eoir-inference-worker:${IMAGE_TAG}"
+
+          docker push "${REGISTRY}/eoir-vision-api:${IMAGE_TAG}"
+          docker push "${REGISTRY}/eoir-inference-worker:${IMAGE_TAG}"

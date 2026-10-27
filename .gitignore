@@ -1,0 +1,22 @@
+# Secrets and environment configuration
+.env
+.env.*
+!.env.example
+
+# Temporary backups
+*.bak
+*.broken
+*.step1.bak
+
+# Python cache
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated release bundles and deployment directories
+release_v*.tar.gz
+field_release/
+
+# Model runtime cache
+models/.trt_cache/

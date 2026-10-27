@@ -1,0 +1,21 @@
+# VCS and local environment
+.git
+.github
+.env
+.env.*
+!.env.example
+*.log
+__pycache__/
+**/__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+
+# Release output and local caches
+release*/
+*.tar
+*.tar.gz
+models/.trt_cache/
+.DS_Store
