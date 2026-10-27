@@ -222,6 +222,9 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -Eeuo pipefail
+
+          REGISTRY="$(printf '%s' "$REGISTRY" | tr '[:upper:]' '[:lower:]')"
+
           docker tag "eoir-vision-api:${IMAGE_TAG}" "${REGISTRY}/eoir-vision-api:${IMAGE_TAG}"
           docker tag "eoir-inference-worker:${IMAGE_TAG}" "${REGISTRY}/eoir-inference-worker:${IMAGE_TAG}"
 
